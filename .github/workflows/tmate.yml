@@ -1,18 +1,24 @@
-name: Create VPS
+name: Create 16GB VPS
 
 on:
   repository_dispatch:
     types: [create-vps]
-  workflow_dispatch: # Allows manual start from the Actions tab
+  workflow_dispatch:
 
 jobs:
   start-vps:
-    runs-on: ubuntu-latest
-    timeout-minutes: 360 # 6 hours max
+    runs-on: ubuntu-latest # High-spec (16GB RAM) only if the repo is PUBLIC
+    timeout-minutes: 360
 
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - name: 🧹 Maximize Resources
+        run: |
+          # This removes unused tools to free up RAM and Disk space
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo docker image prune --all --force
 
       - name: 📁 Create dirs
         run: mkdir -p links .backup
@@ -21,33 +27,23 @@ jobs:
         run: |
           name="${{ github.event.client_payload.vps_name }}"
           if [ "${{ github.event.client_payload.backup }}" == "true" ]; then
-            echo "📂 Restoring backup..."
-            unzip ".backup/$name.zip" -d . || echo "⚠️ No backup to restore."
+            unzip ".backup/$name.zip" -d . || echo "No backup found."
           fi
 
-      - name: 👨‍💻 Start tmate session
+      - name: 👨‍💻 Start tmate
         run: |
-          echo "🚀 Launching tmate..."
-          sudo apt install -y tmate
+          sudo apt update && sudo apt install -y tmate
           tmate -S /tmp/tmate.sock new-session -d
           tmate -S /tmp/tmate.sock wait tmate-ready
           SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
           echo "$SSH" > "links/${{ github.event.client_payload.vps_name }}.txt"
-          echo "✅ SSH Ready: $SSH"
-          sleep 5
+          echo "✅ SSH ACCESS: $SSH"
 
-      - name: 📦 Save backup
-        run: |
-          name="${{ github.event.client_payload.vps_name }}"
-          zip -r ".backup/$name.zip" . -x ".github/*" || true
-
-      - name: 🚀 Push
+      - name: 📦 Auto-Backup & Push
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "📂 Updated SSH + backup for ${{ github.event.client_payload.vps_name }}"
+          commit_message: "VPS Update: ${{ github.event.client_payload.vps_name }}"
           file_pattern: 'links/*.txt .backup/*.zip'
 
-      - name: ⏳ Keep session alive
-        run: |
-          echo "⏳ Keeping session alive for 6 hours..."
-          sleep $((360 * 60))
+      - name: ⏳ Keep Alive
+        run: sleep 21600 # Keeps it running for 6 hours
