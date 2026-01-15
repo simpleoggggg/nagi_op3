@@ -1,4 +1,4 @@
-name: 16GB Dual VPS (tmate + sshx)
+name: 16GB Dual VPS Master
 
 on:
   repository_dispatch:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   start-vps:
-    runs-on: ubuntu-latest # Ensure repo is PUBLIC to get 16GB RAM
+    runs-on: ubuntu-latest # Must be PUBLIC repo for 16GB RAM
     timeout-minutes: 360
 
     steps:
@@ -16,98 +16,116 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 🛑 Check for Stop Command
+      - name: 🛑 Stop Check
         run: |
-          if [ -f "STOP_VPS" ]; then
-            echo "🛑 Stop file detected. Exiting..."
-            rm STOP_VPS
-            git config --global user.name "VPS-System"
-            git config --global user.email "vps@github.com"
-            git add STOP_VPS
-            git commit -m "Confirmed Stop" && git push || true
+          if [ -f "STOP_VPS" ]; then 
+            echo "STOP_VPS detected. Exiting..."
             exit 1
           fi
 
       - name: 🧹 Maximize Resources
         run: |
-          # Frees up ~2GB RAM and 20GB Disk Space
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo docker image prune --all --force
+          sudo apt update && sudo apt install -y tmate curl unzip jq
 
       - name: 📁 Restore Backup
         run: |
           mkdir -p .backup
           if [ "${{ github.event.client_payload.backup }}" == "true" ]; then
-            echo "📂 Restoring previous session data..."
-            unzip ".backup/autovps.zip" -d . || echo "⚠️ No backup found."
+            unzip -o ".backup/autovps.zip" -d . || echo "No backup found."
           fi
 
       - name: 🚀 Start Terminals (tmate & sshx)
         id: access
         run: |
-          sudo apt update && sudo apt install -y tmate curl unzip
-          
           # 1. Setup tmate
           tmate -S /tmp/tmate.sock new-session -d
           tmate -S /tmp/tmate.sock wait tmate-ready
           TMATE_SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
           
-          # 2. Setup sshx with improved link detection
+          # 2. Setup sshx with Aggressive Capture
           curl -sSf https://sshx.io/get | sh
           ./sshx > sshx_log.txt 2>&1 &
           
-          echo "⏳ Waiting for sshx link to generate..."
+          echo "⏳ Waiting for sshx link..."
           for i in {1..15}; do
             SSHX_URL=$(grep -o 'https://sshx.io/s/[^ ]*' sshx_log.txt | head -n 1)
-            if [ -n "$SSHX_URL" ]; then
-              echo "✅ sshx link found!"
-              break
-            fi
+            if [ -n "$SSHX_URL" ]; then break; fi
             sleep 2
           done
           
-          if [ -z "$SSHX_URL" ]; then SSHX_URL="⚠️ Link generation timed out"; fi
+          [ -z "$SSHX_URL" ] && SSHX_URL="⚠️ Timeout"
 
-          # Save links to environment
+          # Hardware Specs
+          RAM=$(free -h | awk '/^Mem:/ {print $2}')
+          CPU=$(nproc)
+
           echo "TMATE=$TMATE_SSH" >> $GITHUB_ENV
           echo "SSHX=$SSHX_URL" >> $GITHUB_ENV
+          echo "RAM_TOTAL=$RAM" >> $GITHUB_ENV
+          echo "CPU_CORES=$CPU" >> $GITHUB_ENV
 
-      - name: 🔔 Discord Notification
+      - name: 🔔 Initial Classic Panel
         run: |
-          ACTIONS_URL="https://github.com/${{ github.repository }}/actions"
           PAYLOAD=$(cat <<EOF
           {
             "embeds": [{
-              "title": "🚀 VPS Online (16GB RAM / 4-Core)",
-              "url": "$ACTIONS_URL",
-              "description": "Your VPS has started and is ready for use.",
-              "color": 3066993,
+              "title": "SYSTEM CONTROL PANEL",
+              "color": 2236962,
+              "description": "Virtual Private Server: **Active**",
               "fields": [
-                {"name": "tmate SSH Access", "value": "\`$TMATE\`"},
-                {"name": "sshx Web Terminal", "value": "$SSHX"},
-                {"name": "Management", "value": "[Go to Actions Page]($ACTIONS_URL)"}
+                {"name": "🛰️ CONNECTION", "value": "\`$TMATE\`"},
+                {"name": "🌐 WEB TERMINAL", "value": "[$SSHX]($SSHX)"},
+                {"name": "📊 HARDWARE", "value": "RAM: $RAM_TOTAL | CPU: $CPU_CORES Cores"},
+                {"name": "💾 BACKUP", "value": "Run \`pkill sleep\` to save & exit"}
               ],
-              "footer": {"text": "Session restarts automatically every 6 hours."}
+              "footer": {"text": "BOOT_TIME: $(date '+%Y-%m-%d %H:%M:%S')"}
             }]
           }
           EOF
           )
-          curl -H "Content-Type: application/json" -d "$PAYLOAD" ${{ secrets.DISCORD_WEBHOOK }}
+          RESP=$(curl -X POST -H "Content-Type: application/json" -d "$PAYLOAD" "${{ secrets.DISCORD_WEBHOOK }}?wait=true")
+          echo "MSG_ID=$(echo \$RESP | jq -r '.id')" >> $GITHUB_ENV
 
-      - name: ⏳ Keep Session Alive
+      - name: ⏳ Keep Alive & 1-Min Classic Update
         run: |
-          echo "✅ VPS is running. Connect using the links sent to Discord."
-          # Sleep for 5h 50m (21000 seconds) to allow 10 mins for backup
+          (
+            while true; do
+              sleep 60
+              UPTIME=$(uptime -p | sed 's/up //')
+              RAM_USAGE=$(free -m | awk '/Mem:/ {print $3 "MB / " $2 "MB"}')
+              LOAD=$(cat /proc/loadavg | awk '{print $1}')
+
+              PAYLOAD=$(cat <<EOF
+              {
+                "embeds": [{
+                  "title": "SYSTEM LIVE STATUS",
+                  "color": 2236962,
+                  "fields": [
+                    {"name": "🛰️ SSH ACCESS", "value": "\`$TMATE\`"},
+                    {"name": "🌐 WEB LINK", "value": "[$SSHX]($SSHX)"},
+                    {"name": "⏱️ UPTIME", "value": "$UPTIME", "inline": true},
+                    {"name": "🧠 RAM LOAD", "value": "$RAM_USAGE", "inline": true},
+                    {"name": "🔥 CPU LOAD", "value": "$LOAD", "inline": true}
+                  ],
+                  "footer": {"text": "Last Sync: $(date '+%H:%M:%S') | Auto-Restart in 6h"}
+                }]
+              }
+              EOF
+              )
+              curl -X PATCH -H "Content-Type: application/json" -d "$PAYLOAD" "${{ secrets.DISCORD_WEBHOOK }}/messages/${{ env.MSG_ID }}"
+            done
+          ) & 
           sleep 21000
 
-      - name: 📦 Auto-Backup before Exit
+      - name: 📦 Final Auto-Backup
         if: always()
         run: |
-          echo "📦 Creating auto-backup..."
-          zip -r ".backup/autovps.zip" . -x ".git/*" ".github/*" "sshx_log.txt"
+          zip -ru ".backup/autovps.zip" . -x ".git/*" ".github/*" "sshx_log.txt"
           git config --global user.name "VPS-Backup"
           git config --global user.email "vps@github.com"
           git add .backup/autovps.zip
-          git commit -m "Auto-backup session data [skip ci]" || echo "No changes to backup"
-          git push
+          git commit -m "Auto-backup [skip ci]" || echo "No changes"
+          git push --force
           
