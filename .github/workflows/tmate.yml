@@ -1,4 +1,4 @@
-name: Create 16GB VPS
+name: 16GB Dual VPS (tmate + sshx)
 
 on:
   repository_dispatch:
@@ -7,43 +7,92 @@ on:
 
 jobs:
   start-vps:
-    runs-on: ubuntu-latest # High-spec (16GB RAM) only if the repo is PUBLIC
+    runs-on: ubuntu-latest # Ensure repo is PUBLIC for 16GB RAM
     timeout-minutes: 360
 
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🛑 Check for Stop Command
+        run: |
+          if [ -f "STOP_VPS" ]; then
+            echo "🛑 Stop file detected. Exiting..."
+            rm STOP_VPS
+            git config --global user.name "VPS-System"
+            git config --global user.email "vps@github.com"
+            git add STOP_VPS
+            git commit -m "Confirmed Stop" && git push || true
+            exit 1
+          fi
 
       - name: 🧹 Maximize Resources
         run: |
-          # This removes unused tools to free up RAM and Disk space
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo docker image prune --all --force
 
-      - name: 📁 Create dirs
-        run: mkdir -p links .backup
-
-      - name: 📁 Restore backup
+      - name: 📁 Restore Backup
         run: |
-          name="${{ github.event.client_payload.vps_name }}"
+          mkdir -p .backup
           if [ "${{ github.event.client_payload.backup }}" == "true" ]; then
-            unzip ".backup/$name.zip" -d . || echo "No backup found."
+            unzip ".backup/autovps.zip" -d . || echo "No backup found."
           fi
 
-      - name: 👨‍💻 Start tmate
+      - name: 🚀 Start Terminals (tmate & sshx)
+        id: access
         run: |
-          sudo apt update && sudo apt install -y tmate
+          sudo apt update && sudo apt install -y tmate curl unzip
+          
+          # Start tmate
           tmate -S /tmp/tmate.sock new-session -d
           tmate -S /tmp/tmate.sock wait tmate-ready
-          SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
-          echo "$SSH" > "links/${{ github.event.client_payload.vps_name }}.txt"
-          echo "✅ SSH ACCESS: $SSH"
+          TMATE_SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
+          
+          # Start sshx
+          curl -sSf https://sshx.io/get | sh
+          # Run sshx and extract the URL using a temp file
+          ./sshx > sshx_log.txt 2>&1 &
+          sleep 5
+          SSHX_URL=$(grep -o 'https://sshx.io/s/[^ ]*' sshx_log.txt | head -n 1)
+          
+          echo "TMATE=$TMATE_SSH" >> $GITHUB_ENV
+          echo "SSHX=$SSHX_URL" >> $GITHUB_ENV
 
-      - name: 📦 Auto-Backup & Push
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "VPS Update: ${{ github.event.client_payload.vps_name }}"
-          file_pattern: 'links/*.txt .backup/*.zip'
+      - name: 🔔 Discord Notification
+        run: |
+          ACTIONS_URL="https://github.com/${{ github.repository }}/actions"
+          PAYLOAD=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "🚀 VPS Online (16GB RAM)",
+              "url": "$ACTIONS_URL",
+              "description": "Both tmate and sshx terminals are ready.",
+              "color": 3066993,
+              "fields": [
+                {"name": "tmate SSH", "value": "\`$TMATE\`"},
+                {"name": "sshx Web Terminal", "value": "$SSHX"},
+                {"name": "Management", "value": "[Click here to stop/manage run]($ACTIONS_URL)"}
+              ],
+              "footer": {"text": "Will auto-restart in 6 hours"}
+            }]
+          }
+          EOF
+          )
+          curl -H "Content-Type: application/json" -d "$PAYLOAD" ${{ secrets.DISCORD_WEBHOOK }}
 
-      - name: ⏳ Keep Alive
-        run: sleep 21600 # Keeps it running for 6 hours
+      - name: ⏳ Keep Session Alive
+        run: |
+          # Runs for 5h 50m to allow time for backup
+          sleep 21000
+
+      - name: 📦 Auto-Backup before Exit
+        if: always()
+        run: |
+          zip -r ".backup/autovps.zip" . -x ".git/*" ".github/*"
+          git config --global user.name "VPS-Backup"
+          git config --global user.email "vps@github.com"
+          git add .backup/autovps.zip
+          git commit -m "Auto-backup session data" || echo "No changes"
+          git push
