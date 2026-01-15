@@ -1,4 +1,4 @@
-name: 16GB Dual VPS Master
+name: 16GB Dual VPS Fixed
 
 on:
   repository_dispatch:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   start-vps:
-    runs-on: ubuntu-latest # Must be PUBLIC repo for 16GB RAM
+    runs-on: ubuntu-latest
     timeout-minutes: 360
 
     steps:
@@ -18,10 +18,7 @@ jobs:
 
       - name: 🛑 Stop Check
         run: |
-          if [ -f "STOP_VPS" ]; then 
-            echo "STOP_VPS detected. Exiting..."
-            exit 1
-          fi
+          if [ -f "STOP_VPS" ]; then exit 1; fi
 
       - name: 🧹 Maximize Resources
         run: |
@@ -33,87 +30,42 @@ jobs:
         run: |
           mkdir -p .backup
           if [ "${{ github.event.client_payload.backup }}" == "true" ]; then
-            unzip -o ".backup/autovps.zip" -d . || echo "No backup found."
+            unzip -o ".backup/autovps.zip" -d . || echo "No backup"
           fi
 
-      - name: 🚀 Start Terminals (tmate & sshx)
-        id: access
+      - name: 🚀 Start Terminals
         run: |
-          # 1. Setup tmate
           tmate -S /tmp/tmate.sock new-session -d
           tmate -S /tmp/tmate.sock wait tmate-ready
           TMATE_SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
           
-          # 2. Setup sshx with Aggressive Capture
           curl -sSf https://sshx.io/get | sh
           ./sshx > sshx_log.txt 2>&1 &
           
-          echo "⏳ Waiting for sshx link..."
-          for i in {1..15}; do
-            SSHX_URL=$(grep -o 'https://sshx.io/s/[^ ]*' sshx_log.txt | head -n 1)
-            if [ -n "$SSHX_URL" ]; then break; fi
-            sleep 2
-          done
-          
+          sleep 12
+          SSHX_URL=$(grep -o 'https://sshx.io/s/[^ ]*' sshx_log.txt | head -n 1)
           [ -z "$SSHX_URL" ] && SSHX_URL="⚠️ Timeout"
-
-          # Hardware Specs
-          RAM=$(free -h | awk '/^Mem:/ {print $2}')
-          CPU=$(nproc)
 
           echo "TMATE=$TMATE_SSH" >> $GITHUB_ENV
           echo "SSHX=$SSHX_URL" >> $GITHUB_ENV
-          echo "RAM_TOTAL=$RAM" >> $GITHUB_ENV
-          echo "CPU_CORES=$CPU" >> $GITHUB_ENV
+          echo "RAM=$(free -h | awk '/^Mem:/ {print $2}')" >> $GITHUB_ENV
 
-      - name: 🔔 Initial Classic Panel
+      - name: 🔔 Discord Panel
         run: |
-          PAYLOAD=$(cat <<EOF
-          {
-            "embeds": [{
-              "title": "SYSTEM CONTROL PANEL",
-              "color": 2236962,
-              "description": "Virtual Private Server: **Active**",
-              "fields": [
-                {"name": "🛰️ CONNECTION", "value": "\`$TMATE\`"},
-                {"name": "🌐 WEB TERMINAL", "value": "[$SSHX]($SSHX)"},
-                {"name": "📊 HARDWARE", "value": "RAM: $RAM_TOTAL | CPU: $CPU_CORES Cores"},
-                {"name": "💾 BACKUP", "value": "Run \`pkill sleep\` to save & exit"}
-              ],
-              "footer": {"text": "BOOT_TIME: $(date '+%Y-%m-%d %H:%M:%S')"}
-            }]
-          }
-          EOF
-          )
+          PAYLOAD=$(printf '{"embeds": [{"title": "SYSTEM CONTROL PANEL", "color": 2236962, "description": "VPS: **Active**", "fields": [{"name": "🛰️ CONNECTION", "value": "```%s```"}, {"name": "🌐 WEB LINK", "value": "%s"}, {"name": "📊 RAM", "value": "%s", "inline": true}, {"name": "💾 SAVE", "value": "`pkill sleep`", "inline": true}]}]}' "$TMATE" "$SSHX" "$RAM")
           RESP=$(curl -X POST -H "Content-Type: application/json" -d "$PAYLOAD" "${{ secrets.DISCORD_WEBHOOK }}?wait=true")
-          echo "MSG_ID=$(echo \$RESP | jq -r '.id')" >> $GITHUB_ENV
+          echo "MSG_ID=$(echo $RESP | jq -r '.id')" >> $GITHUB_ENV
 
-      - name: ⏳ Keep Alive & 1-Min Classic Update
+      - name: ⏳ Keep Alive & Update
         run: |
           (
             while true; do
               sleep 60
               UPTIME=$(uptime -p | sed 's/up //')
-              RAM_USAGE=$(free -m | awk '/Mem:/ {print $3 "MB / " $2 "MB"}')
-              LOAD=$(cat /proc/loadavg | awk '{print $1}')
-
-              PAYLOAD=$(cat <<EOF
-              {
-                "embeds": [{
-                  "title": "SYSTEM LIVE STATUS",
-                  "color": 2236962,
-                  "fields": [
-                    {"name": "🛰️ SSH ACCESS", "value": "\`$TMATE\`"},
-                    {"name": "🌐 WEB LINK", "value": "[$SSHX]($SSHX)"},
-                    {"name": "⏱️ UPTIME", "value": "$UPTIME", "inline": true},
-                    {"name": "🧠 RAM LOAD", "value": "$RAM_USAGE", "inline": true},
-                    {"name": "🔥 CPU LOAD", "value": "$LOAD", "inline": true}
-                  ],
-                  "footer": {"text": "Last Sync: $(date '+%H:%M:%S') | Auto-Restart in 6h"}
-                }]
-              }
-              EOF
-              )
+              RAM_USED=$(free -m | awk '/Mem:/ {print $3 "MB / " $2 "MB"}')
+              
+              PAYLOAD=$(printf '{"embeds": [{"title": "LIVE STATUS", "color": 2236962, "fields": [{"name": "🛰️ SSH", "value": "```%s```"}, {"name": "⏱️ UPTIME", "value": "%s", "inline": true}, {"name": "🧠 RAM", "value": "%s", "inline": true}], "footer": {"text": "Last Sync: %s" } }]}' "$TMATE" "$UPTIME" "$RAM_USED" "$(date +%H:%M:%S)")
+              
               curl -X PATCH -H "Content-Type: application/json" -d "$PAYLOAD" "${{ secrets.DISCORD_WEBHOOK }}/messages/${{ env.MSG_ID }}"
             done
           ) & 
