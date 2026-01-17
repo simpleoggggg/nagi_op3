@@ -1,85 +1,59 @@
-name: 16GB Dual VPS Master
-
+name: 24-7 Persistent VPS
 on:
   repository_dispatch:
     types: [create-vps]
   workflow_dispatch:
-  push:
-    branches: [ "main" ]
 
 jobs:
-  start-vps:
-    runs-on: ubuntu-latest # Ensure Repo is PUBLIC for 16GB RAM
-    timeout-minutes: 360
-
+  vps-run:
+    runs-on: ubuntu-latest
     steps:
-      - name: ⬇️ Checkout
+      - name: ⬇️ Clone Repo
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.MY_TOKEN }}
-          fetch-depth: 0
-
-      - name: 🛑 Stop Check
-        run: |
-          if [ -f "STOP_VPS" ]; then exit 1; fi
-
-      - name: 🧹 Maximize Resources
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo docker image prune --all --force
-          sudo apt update && sudo apt install -y tmate curl unzip jq
 
       - name: 📁 Restore Previous Data
         run: |
+          mkdir -p .backup
           if [ -f ".backup/autovps.zip" ]; then
-            echo "✅ Restoring data..."
             unzip -o ".backup/autovps.zip" -d ./
           fi
 
-      - name: 🚀 Start Terminals (tmate & sshx)
+      - name: 🚀 Start New SSH & Notify Discord
         run: |
-          # Start tmate
+          sudo apt update && sudo apt install -y tmate
           tmate -S /tmp/tmate.sock new-session -d
           tmate -S /tmp/tmate.sock wait tmate-ready
           TMATE_SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
           
-          # Start sshx (Your requested tool)
           curl -sSf https://sshx.io/get | sh
           ./sshx > sshx_log.txt 2>&1 &
-          
-          sleep 12
+          sleep 10
           SSHX_URL=$(grep -o 'https://sshx.io/s/[^ ]*' sshx_log.txt | head -n 1)
-          
-          echo "TMATE=$TMATE_SSH" >> $GITHUB_ENV
-          echo "SSHX=$SSHX_URL" >> $GITHUB_ENV
-          echo "RAM=$(free -h | awk '/^Mem:/ {print $2}')" >> $GITHUB_ENV
 
-      - name: 🔔 Discord Classic Panel
-        run: |
-          PAYLOAD=$(printf '{"embeds": [{"title": "SYSTEM CONTROL PANEL", "color": 2236962, "description": "VPS: **Active** (16GB RAM)", "fields": [{"name": "🛰️ tmate SSH", "value": "```%s```"}, {"name": "🌐 sshx Web", "value": "%s"}, {"name": "📊 RAM", "value": "%s", "inline": true}, {"name": "💾 SAVE", "value": "`pkill sleep`", "inline": true}]}]}' "$TMATE" "$SSHX" "$RAM")
-          RESP=$(curl -X POST -H "Content-Type: application/json" -d "$PAYLOAD" "${{ secrets.DISCORD_WEBHOOK }}?wait=true")
-          echo "MSG_ID=$(echo $RESP | jq -r '.id')" >> $GITHUB_ENV
+          curl -H "Content-Type: application/json" -d "{
+            \"embeds\": [{
+              \"title\": \"🔄 VPS RESTARTED & DATA LOADED\",
+              \"description\": \"Previous data restored. New access links below:\",
+              \"color\": 3066993,
+              \"fields\": [
+                {\"name\": \"🛰️ SSH\", \"value\": \"\`$TMATE_SSH\`\"},
+                {\"name\": \"🌐 Web\", \"value\": \"$SSHX_URL\"}
+              ]
+            }]
+          }" ${{ secrets.DISCORD_WEBHOOK }}
 
-      - name: ⏳ Keep Alive & 1-Min Updates
-        run: |
-          (
-            while true; do
-              sleep 60
-              UPTIME=$(uptime -p | sed 's/up //')
-              RAM_USED=$(free -m | awk '/Mem:/ {print $3 "MB / " $2 "MB"}')
-              PAYLOAD=$(printf '{"embeds": [{"title": "LIVE STATUS", "color": 2236962, "fields": [{"name": "🛰️ SSH", "value": "```%s```"}, {"name": "⏱️ UPTIME", "value": "%s", "inline": true}, {"name": "🧠 RAM", "value": "%s", "inline": true}], "footer": {"text": "Last Sync: %s" } }]}' "$TMATE" "$UPTIME" "$RAM_USED" "$(date +%H:%M:%S)")
-              curl -X PATCH -H "Content-Type: application/json" -d "$PAYLOAD" "${{ secrets.DISCORD_WEBHOOK }}/messages/${{ env.MSG_ID }}"
-            done
-          ) & 
-          sleep 21000
+      - name: ⏳ Stay Alive
+        run: sleep 21000 
 
-      - name: 📦 Final Auto-Backup & Loop Trigger
+      - name: 📦 Save Data & Trigger Restart
         if: always()
         run: |
           mkdir -p .backup
           zip -ru ".backup/autovps.zip" . -x ".git/*" ".github/*" "sshx_log.txt"
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "vps-system"
+          git config --global user.email "vps@github.com"
           git add .backup/autovps.zip
-          git commit -m "Auto-save data [skip ci]" || echo "No changes"
+          git commit -m "Auto-backup [skip ci]" || echo "No changes"
           git push https://${{ secrets.MY_TOKEN }}@github.com/${{ github.repository }}.git main --force
