@@ -1,20 +1,17 @@
-name: Auto Start VPS Loop
-
+name: VPS Auto-Loop Trigger
 on:
   push:
     branches: [main]
     paths:
-      - '.backup/autovps.zip' # Triggers when backup is pushed
-  workflow_dispatch:
+      - '.backup/autovps.zip'
 
 jobs:
-  redeploy:
+  restart:
     runs-on: ubuntu-latest
     steps:
-      - name: 🚀 Trigger Next VPS Session
+      - name: 🚀 Trigger Next VPS
         run: |
           curl -X POST https://api.github.com/repos/${{ github.repository }}/dispatches \
-          -H "Accept: application/vnd.github.v3+json" \
           -H "Authorization: token ${{ secrets.MY_TOKEN }}" \
-          -d '{"event_type": "create-vps", "client_payload": {"backup": "true"}}'
-
+          -H "Accept: application/vnd.github.v3+json" \
+          -d '{"event_type": "create-vps"}'
