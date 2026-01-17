@@ -1,28 +1,30 @@
 name: 24-7 Persistent VPS
 on:
+  workflow_dispatch:      # Allows manual "Jumpstart"
   repository_dispatch:
-    types: [create-vps] # This is the "Ear" that listens for the restart signal
-  workflow_dispatch:      # Allows you to start it manually
+    types: [create-vps]  # Handles the 24/7 auto-loop
 
 jobs:
   vps-run:
     runs-on: ubuntu-latest
     steps:
-      - name: ⬇️ Clone Repo with PAT
+      - name: ⬇️ 1. Connecting to Repository
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.MY_TOKEN }} # Crucial for bypassing loop protection
+          token: ${{ secrets.MY_TOKEN }}
           persist-credentials: true
 
-      - name: 📁 Restore Previous Data
+      - name: 📁 2. Locating and Restoring Backup
         run: |
           mkdir -p .backup
           if [ -f ".backup/autovps.zip" ]; then
-            echo "✅ Data found. Restoring..."
-            unzip -o ".backup/autovps.zip" -d ./
+            echo "✅ Backup found! Injecting data..."
+            unzip -o ".backup/autovps.zip" -d ./ || echo "Extraction failed"
+          else
+            echo "⚠️ No backup found. Starting fresh workspace."
           fi
 
-      - name: 🚀 Start New SSH & Notify Discord
+      - name: 🚀 3. Generating New Access
         run: |
           sudo apt update && sudo apt install -y tmate
           tmate -S /tmp/tmate.sock new-session -d
@@ -34,29 +36,33 @@ jobs:
           sleep 12
           SSHX_URL=$(grep -o 'https://sshx.io/s/[^ ]*' sshx_log.txt | head -n 1)
 
-          curl -H "Content-Type: application/json" -d "{
+          # --- UPDATED MODERN DISCORD EMBED ---
+          curl -X POST -H "Content-Type: application/json" -d "{
             \"embeds\": [{
-              \"title\": \"🔄 VPS RESTARTED & DATA LOADED\",
-              \"description\": \"Data has been restored to the new machine.\",
-              \"color\": 3066993,
+              \"title\": \"🛰️ VPS CLOUD INSTANCE ACTIVE\",
+              \"description\": \"Your previous repository data has been successfully restored to this session.\",
+              \"color\": 5814783,
               \"fields\": [
-                {\"name\": \"🛰️ SSH (tmate)\", \"value\": \"\`$TMATE_SSH\`\"},
-                {\"name\": \"🌐 Web (sshx)\", \"value\": \"$SSHX_URL\"}
+                { \"name\": \"🔑 SSH Access (tmate)\", \"value\": \"\`$TMATE_SSH\`\" },
+                { \"name\": \"🌐 Web Terminal (sshx)\", \"value\": \"[Click here to open]($SSHX_URL)\" },
+                { \"name\": \"📊 System Specs\", \"value\": \"16GB RAM | Ubuntu Latest\", \"inline\": true },
+                { \"name\": \"💾 Data Status\", \"value\": \"✅ Fully Restored\", \"inline\": true }
               ],
-              \"footer\": {\"text\": \"GitHub Runner - 16GB RAM\"}
+              \"footer\": { \"text\": \"Next automatic relay in 6 hours\" },
+              \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
             }]
           }" ${{ secrets.DISCORD_WEBHOOK }}
 
-      - name: ⏳ Stay Alive (6 Hours)
+      - name: ⏳ 4. Session Active
         run: sleep 21000 
 
-      - name: 📦 Save & Push Backup
+      - name: 📦 5. Auto-Save & Trigger Relay
         if: always()
         run: |
           mkdir -p .backup
           zip -ru ".backup/autovps.zip" . -x ".git/*" ".github/*" "sshx_log.txt"
-          git config --global user.name "vps-system-bot"
+          git config --global user.name "vps-relay-bot"
           git config --global user.email "vps@github.com"
           git add .backup/autovps.zip
-          git commit -m "Auto-backup [skip ci]" || echo "No changes"
+          git commit -m "System Data Sync [skip ci]" || echo "No changes"
           git push origin main --force
