@@ -1,22 +1,24 @@
 name: 24-7 Persistent VPS
 on:
   repository_dispatch:
-    types: [create-vps]
-  workflow_dispatch:
+    types: [create-vps] # This is the "Ear" that listens for the restart signal
+  workflow_dispatch:      # Allows you to start it manually
 
 jobs:
   vps-run:
     runs-on: ubuntu-latest
     steps:
-      - name: ⬇️ Clone Repo
+      - name: ⬇️ Clone Repo with PAT
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.MY_TOKEN }}
+          token: ${{ secrets.MY_TOKEN }} # Crucial for bypassing loop protection
+          persist-credentials: true
 
       - name: 📁 Restore Previous Data
         run: |
           mkdir -p .backup
           if [ -f ".backup/autovps.zip" ]; then
+            echo "✅ Data found. Restoring..."
             unzip -o ".backup/autovps.zip" -d ./
           fi
 
@@ -29,31 +31,32 @@ jobs:
           
           curl -sSf https://sshx.io/get | sh
           ./sshx > sshx_log.txt 2>&1 &
-          sleep 10
+          sleep 12
           SSHX_URL=$(grep -o 'https://sshx.io/s/[^ ]*' sshx_log.txt | head -n 1)
 
           curl -H "Content-Type: application/json" -d "{
             \"embeds\": [{
               \"title\": \"🔄 VPS RESTARTED & DATA LOADED\",
-              \"description\": \"Previous data restored. New access links below:\",
+              \"description\": \"Data has been restored to the new machine.\",
               \"color\": 3066993,
               \"fields\": [
-                {\"name\": \"🛰️ SSH\", \"value\": \"\`$TMATE_SSH\`\"},
-                {\"name\": \"🌐 Web\", \"value\": \"$SSHX_URL\"}
-              ]
+                {\"name\": \"🛰️ SSH (tmate)\", \"value\": \"\`$TMATE_SSH\`\"},
+                {\"name\": \"🌐 Web (sshx)\", \"value\": \"$SSHX_URL\"}
+              ],
+              \"footer\": {\"text\": \"GitHub Runner - 16GB RAM\"}
             }]
           }" ${{ secrets.DISCORD_WEBHOOK }}
 
-      - name: ⏳ Stay Alive
+      - name: ⏳ Stay Alive (6 Hours)
         run: sleep 21000 
 
-      - name: 📦 Save Data & Trigger Restart
+      - name: 📦 Save & Push Backup
         if: always()
         run: |
           mkdir -p .backup
           zip -ru ".backup/autovps.zip" . -x ".git/*" ".github/*" "sshx_log.txt"
-          git config --global user.name "vps-system"
+          git config --global user.name "vps-system-bot"
           git config --global user.email "vps@github.com"
           git add .backup/autovps.zip
           git commit -m "Auto-backup [skip ci]" || echo "No changes"
-          git push https://${{ secrets.MY_TOKEN }}@github.com/${{ github.repository }}.git main --force
+          git push origin main --force
