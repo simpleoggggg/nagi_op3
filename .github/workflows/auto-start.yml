@@ -6,12 +6,12 @@ on:
       - '.backup/autovps.zip'
 
 jobs:
-  restart:
+  loop-restart:
     runs-on: ubuntu-latest
     steps:
-      - name: 🚀 Trigger Next VPS
+      - name: 🚀 Send Restart Signal
         run: |
           curl -X POST https://api.github.com/repos/${{ github.repository }}/dispatches \
-          -H "Authorization: token ${{ secrets.MY_TOKEN }}" \
           -H "Accept: application/vnd.github.v3+json" \
+          -H "Authorization: Bearer ${{ secrets.MY_TOKEN }}" \
           -d '{"event_type": "create-vps"}'
