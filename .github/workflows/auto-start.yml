@@ -6,10 +6,10 @@ on:
       - '.backup/autovps.zip'
 
 jobs:
-  loop-restart:
+  restart-relay:
     runs-on: ubuntu-latest
     steps:
-      - name: 🚀 Send Restart Signal
+      - name: 🚀 Dispatching New Instance
         run: |
           curl -X POST https://api.github.com/repos/${{ github.repository }}/dispatches \
           -H "Accept: application/vnd.github.v3+json" \
